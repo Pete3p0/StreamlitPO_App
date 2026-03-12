@@ -56,12 +56,21 @@ def extract_text_from_pdf(file) -> str:
 
 
 def parse_po_number(text: str) -> str:
+    # Many Computer Mania docs carry an 8-digit PO/doc number near date + page footer.
+    m = re.search(r"\b\d{2}/\d{2}/\d{4}\s+(\d{8})\s+Page\s*:\s*\d+", text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Fallbacks for other layouts
     m = re.search(r"(\d{10})\s*\n\s*PURCHASE ORDER NUMBER", text, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(r"PURCHASE ORDER NUMBER\s*\n\s*(\d{6,12})", text, re.IGNORECASE)
     if m:
         return m.group(1)
+    m = re.search(r"\b\d{8}\b", text)
+    if m:
+        return m.group(0)
     m = re.search(r"\b\d{10}\b", text)
     return m.group(0) if m else ""
 
@@ -78,24 +87,97 @@ def parse_rows(text: str):
     rows = []
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
+    def is_num(s: str) -> bool:
+        return bool(NUM_RE.match(s))
+
+    def try_map_numbers(nums):
+        """Try common column orders and pick best consistency score."""
+        candidates = []
+        if len(nums) < 5:
+            return None
+
+        # Format A: qty, price, total_excl, tax, total_incl
+        a = {
+            "quantity": nums[0],
+            "price": nums[1],
+            "total_excl": nums[2],
+            "tax": nums[3],
+            "total_incl": nums[4],
+        }
+        candidates.append(a)
+
+        # Format B (seen in some PDFs): total_incl, tax, total_excl, price, qty
+        b = {
+            "quantity": nums[4],
+            "price": nums[3],
+            "total_excl": nums[2],
+            "tax": nums[1],
+            "total_incl": nums[0],
+        }
+        candidates.append(b)
+
+        def score(c):
+            q = c["quantity"]
+            p = c["price"]
+            te = c["total_excl"]
+            t = c["tax"]
+            ti = c["total_incl"]
+            s = 0
+            if q > 0 and q < 10000 and abs(q - round(q)) <= 0.01:
+                s += 2
+            if p > 0:
+                s += 1
+            if abs((p * q) - te) <= max(1.0, te * 0.03):
+                s += 3
+            if abs((te + t) - ti) <= max(1.0, ti * 0.03):
+                s += 3
+            return s
+
+        best = max(candidates, key=score)
+        return best if score(best) >= 4 else None
+
     i = 0
     while i < len(lines):
         token = lines[i]
-        if ITEM_CODE_RE.match(token) and i + 6 < len(lines):
-            desc = lines[i + 1]
-            qty, price, texcl, tax, tincl = lines[i + 2:i + 7]
-            if all(NUM_RE.match(x) for x in [qty, price, texcl, tax, tincl]):
+        if ITEM_CODE_RE.match(token):
+            # Gather nearby numeric tokens
+            j = i + 1
+            nums = []
+            first_non_num_after_nums = None
+            while j < len(lines) and j <= i + 16:
+                if is_num(lines[j]):
+                    nums.append(float(lines[j]))
+                elif nums:
+                    first_non_num_after_nums = j
+                    break
+                j += 1
+
+            mapped = try_map_numbers(nums[:5])
+            if mapped:
+                desc = ""
+                if first_non_num_after_nums is not None:
+                    desc = lines[first_non_num_after_nums]
+                elif i + 1 < len(lines):
+                    # fallback if description was before numbers in weird layouts
+                    desc = lines[i + 1] if not is_num(lines[i + 1]) else ""
+
+                # Skip obvious footer noise as description
+                if desc.lower().startswith(("total", "computer mania", "page:", "po date")):
+                    desc = ""
+
                 rows.append({
                     "item_number": token,
                     "description": desc,
-                    "quantity": float(qty),
-                    "price": float(price),
-                    "total_excl": float(texcl),
-                    "tax": float(tax),
-                    "total_incl": float(tincl),
+                    "quantity": float(mapped["quantity"]),
+                    "price": float(mapped["price"]),
+                    "total_excl": float(mapped["total_excl"]),
+                    "tax": float(mapped["tax"]),
+                    "total_incl": float(mapped["total_incl"]),
                 })
-                i += 7
+
+                i = j
                 continue
+
         i += 1
 
     return rows
