@@ -88,22 +88,27 @@ def parse_po_date(text: str) -> str:
 
 
 def parse_po_from_filename(filename: str) -> str:
-    # Example: Purchase Order-20260126-00135991-KW.pdf -> 00135991-KW
-    m = re.search(r"(?:^|-)\d{8}-(\d{8}-[A-Za-z0-9]+)(?:\.pdf)?$", filename, re.IGNORECASE)
+    """
+    Extract everything after an 8-digit date and before .pdf.
+    Example: Purchase Order-20260126-00135991-KW.pdf -> 00135991-KW
+    """
+    name = os.path.basename(filename)
+    m = re.search(r"\d{8}[-_](.+?)\.pdf$", name, re.IGNORECASE)
     if m:
-        return m.group(1)
-
-    # Fallback: pick trailing token after date if present
-    m = re.search(r"(?:^|-)\d{8}-([^\.]+)(?:\.pdf)?$", filename, re.IGNORECASE)
-    if m:
-        return m.group(1)
-
+        return m.group(1).strip("-_ ")
     return ""
-
 
 def parse_rows(text: str):
     rows = []
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def clean_desc(desc: str) -> str:
+        if not desc:
+            return ""
+        # Trim common trailing headers/footer spill-over
+        desc = re.split(r"\b(Total\s+Incl|Total\s+Excl|Price|Quantity|Description|Tax|PO\s+Date|Page\s*:|COMPUTER\s+MANIA)\b", desc, maxsplit=1, flags=re.IGNORECASE)[0]
+        desc = re.sub(r"\s+", " ", desc).strip(" -|,;")
+        return desc
 
     def is_num(s: str) -> bool:
         return bool(NUM_RE.match(s))
@@ -179,7 +184,7 @@ def parse_rows(text: str):
                     # fallback if description was before numbers in weird layouts
                     desc = lines[i + 1] if not is_num(lines[i + 1]) else ""
 
-                # Skip obvious footer noise as description
+                desc = clean_desc(desc)
                 if desc.lower().startswith(("total", "computer mania", "page:", "po date")):
                     desc = ""
 
@@ -219,11 +224,19 @@ def parse_rows(text: str):
                 if mapped:
                     desc = ""
                     if nidx:
-                        # description likely starts right after numeric block
-                        ds = nidx[-1] + 1
-                        de = min(ds + 10, len(tokens))
-                        cand = " ".join(tokens[ds:de]).strip()
-                        if cand and not cand.lower().startswith(("total", "computer", "page", "po")):
+                        # Try text BETWEEN item code and first numeric first
+                        ds1 = k + 1
+                        de1 = nidx[0]
+                        cand1 = " ".join(tokens[ds1:de1]).strip()
+
+                        # Then fallback to text after numeric block
+                        ds2 = nidx[-1] + 1
+                        de2 = min(ds2 + 14, len(tokens))
+                        cand2 = " ".join(tokens[ds2:de2]).strip()
+
+                        cand = cand1 if cand1 else cand2
+                        cand = clean_desc(cand)
+                        if cand and not cand.lower().startswith(("total", "computer", "page", "po", "item number")):
                             desc = cand
 
                     rows.append({
