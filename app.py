@@ -87,6 +87,20 @@ def parse_po_date(text: str) -> str:
     return m.group(1) if m else ""
 
 
+def parse_po_from_filename(filename: str) -> str:
+    # Example: Purchase Order-20260126-00135991-KW.pdf -> 00135991-KW
+    m = re.search(r"(?:^|-)\d{8}-(\d{8}-[A-Za-z0-9]+)(?:\.pdf)?$", filename, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Fallback: pick trailing token after date if present
+    m = re.search(r"(?:^|-)\d{8}-([^\.]+)(?:\.pdf)?$", filename, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    return ""
+
+
 def parse_rows(text: str):
     rows = []
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -291,7 +305,7 @@ if st.button("Process", type="primary"):
         for f in files:
             try:
                 text = extract_text_from_pdf(f)
-                po_number = parse_po_number(text)
+                po_number = parse_po_from_filename(f.name) or parse_po_number(text)
                 po_date = parse_po_date(text)
                 rows = parse_rows(text)
 
