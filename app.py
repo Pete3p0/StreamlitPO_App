@@ -180,6 +180,47 @@ def parse_rows(text: str):
 
         i += 1
 
+    # Fallback for PDFs extracted as one long line (common on cloud parsers)
+    if not rows:
+        tokens = re.findall(r"[A-Z0-9\-/\.\"]+|\d+\.\d+|\d+", text)
+        k = 0
+        while k < len(tokens):
+            tok = tokens[k]
+            if ITEM_CODE_RE.match(tok):
+                # collect next numeric values in local window
+                nums = []
+                nidx = []
+                m = k + 1
+                while m < len(tokens) and m <= k + 40 and len(nums) < 5:
+                    if NUM_RE.match(tokens[m]):
+                        nums.append(float(tokens[m]))
+                        nidx.append(m)
+                    m += 1
+
+                mapped = try_map_numbers(nums)
+                if mapped:
+                    desc = ""
+                    if nidx:
+                        # description likely starts right after numeric block
+                        ds = nidx[-1] + 1
+                        de = min(ds + 10, len(tokens))
+                        cand = " ".join(tokens[ds:de]).strip()
+                        if cand and not cand.lower().startswith(("total", "computer", "page", "po")):
+                            desc = cand
+
+                    rows.append({
+                        "item_number": tok,
+                        "description": desc,
+                        "quantity": float(mapped["quantity"]),
+                        "price": float(mapped["price"]),
+                        "total_excl": float(mapped["total_excl"]),
+                        "tax": float(mapped["tax"]),
+                        "total_incl": float(mapped["total_incl"]),
+                    })
+                    k = m
+                    continue
+            k += 1
+
     return rows
 
 
