@@ -1,4 +1,8 @@
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from io import BytesIO
 
 import streamlit as st
@@ -15,6 +19,35 @@ NUM_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
 
 def extract_text_from_pdf(file) -> str:
+    """
+    Prefer Poppler pdftotext (better layout/text recovery on PO PDFs),
+    then fallback to pypdf if pdftotext is unavailable/fails.
+    """
+    # Streamlit upload file-like object can be read multiple times if we reset pointer
+    file.seek(0)
+
+    pdftotext_bin = shutil.which("pdftotext")
+    if pdftotext_bin:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf.write(file.read())
+            pdf_path = tmp_pdf.name
+
+        txt_path = pdf_path + ".txt"
+        try:
+            # -layout preserves columns better for table-like PDFs
+            subprocess.run([pdftotext_bin, "-layout", pdf_path, txt_path], check=True)
+            with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception:
+            # fall through to pypdf fallback
+            pass
+        finally:
+            for p in (pdf_path, txt_path):
+                if os.path.exists(p):
+                    os.remove(p)
+
+    # Fallback: pure-python extraction
+    file.seek(0)
     reader = PdfReader(file)
     parts = []
     for page in reader.pages:
