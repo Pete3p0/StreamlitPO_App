@@ -14,7 +14,8 @@ st.set_page_config(page_title="PO PDF to Excel", page_icon="📄", layout="wide"
 st.title("📄 Purchase Order PDFs → One Excel")
 st.caption("Upload multiple PO PDFs, extract line items, and download one combined XLSX.")
 
-ITEM_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\-]{3,}$")
+# Accept common supplier item-code characters: -, /, _
+ITEM_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\-/_]{3,}$")
 NUM_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
 
@@ -57,7 +58,8 @@ def extract_text_from_pdf(file) -> str:
 
 def parse_po_number(text: str) -> str:
     # Many Computer Mania docs carry an 8-digit PO/doc number near date + page footer.
-    m = re.search(r"\b\d{2}/\d{2}/\d{4}\s+(\d{8})\s+Page\s*:\s*\d+", text, re.IGNORECASE)
+    # Use DOTALL to survive collapsed/one-line extraction.
+    m = re.search(r"\b\d{2}/\d{2}/\d{4}\b.{0,40}?\b(\d{8})\b.{0,20}?Page\s*:?\s*\d+", text, re.IGNORECASE | re.DOTALL)
     if m:
         return m.group(1)
 
@@ -68,6 +70,8 @@ def parse_po_number(text: str) -> str:
     m = re.search(r"PURCHASE ORDER NUMBER\s*\n\s*(\d{6,12})", text, re.IGNORECASE)
     if m:
         return m.group(1)
+
+    # Last-resort generic captures
     m = re.search(r"\b\d{8}\b", text)
     if m:
         return m.group(0)
